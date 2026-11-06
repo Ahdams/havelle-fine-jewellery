@@ -31,7 +31,7 @@ Deno.serve(async (request: Request) => {
   if (!PROJECT_URL || !SERVICE_KEY) return respond({ error: 'Shop service is not configured.' }, 503, origin);
 
   const length = Number(request.headers.get('content-length') || 0);
-  if (length > 20_000) return respond({ error: 'Request is too large.' }, 413, origin);
+  if (length > 6_000_000) return respond({ error: 'Request is too large.' }, 413, origin);
 
   let body: Record<string, unknown>;
   try {
@@ -39,9 +39,9 @@ Deno.serve(async (request: Request) => {
   } catch {
     return respond({ error: 'Send valid JSON.' }, 400, origin);
   }
-  if (new TextEncoder().encode(JSON.stringify(body)).length > 20_000) {
-    return respond({ error: 'Request is too large.' }, 413, origin);
-  }
+  const bodyBytes = new TextEncoder().encode(JSON.stringify(body)).length;
+  const bodyLimit = body.action === 'upload_receipt' ? 6_000_000 : 20_000;
+  if (bodyBytes > bodyLimit) return respond({ error: 'Request is too large.' }, 413, origin);
   if (typeof body.website === 'string' && body.website.trim()) return respond({ error: 'Request rejected.' }, 400, origin);
 
   const headers = { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, 'Content-Type': 'application/json' };
@@ -79,12 +79,41 @@ Deno.serve(async (request: Request) => {
     return respond({ order: result }, 201, origin);
   }
 
+  if (body.action === 'upload_receipt') {
+    const tracking = typeof body.tracking_code === 'string' ? body.tracking_code.trim().toUpperCase() : '';
+    const mime = body.mime_type;
+    const base64 = body.receipt_base64;
+    if (!/^HV-[A-F0-9]{20}$/.test(tracking)) return respond({ error: 'Enter your valid order tracking number.' }, 400, origin);
+    if (!['image/jpeg', 'image/png', 'application/pdf'].includes(String(mime)) || typeof base64 !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) {
+      return respond({ error: 'Upload a JPG, PNG, or PDF receipt.' }, 400, origin);
+    }
+    const estimatedBytes = Math.floor(base64.length * 3 / 4);
+    if (estimatedBytes < 1 || estimatedBytes > 4 * 1024 * 1024) return respond({ error: 'Receipt files must be 4 MB or smaller.' }, 413, origin);
+    const code = encodeURIComponent(tracking);
+    const orderResponse = await fetch(`${PROJECT_URL}/rest/v1/orders?select=id,tracking_code&tracking_code=eq.${code}&limit=1`, { headers });
+    const found = await orderResponse.json().catch(() => null);
+    if (!orderResponse.ok) return respond({ error: 'Order lookup is temporarily unavailable.' }, 502, origin);
+    if (!Array.isArray(found) || !found.length) return respond({ error: 'We could not find an order with that tracking number.' }, 404, origin);
+    const extension = mime === 'application/pdf' ? 'pdf' : mime === 'image/png' ? 'png' : 'jpg';
+    const objectPath = `${tracking}/${crypto.randomUUID()}.${extension}`;
+    const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+    const uploaded = await fetch(`${PROJECT_URL}/storage/v1/object/havelle-payment-receipts/${objectPath}`, {
+      method: 'POST', headers: { ...headers, 'Content-Type': String(mime), 'x-upsert': 'false' }, body: bytes,
+    });
+    if (!uploaded.ok) return respond({ error: 'Receipt upload failed. Please try again.' }, 502, origin);
+    const update = await fetch(`${PROJECT_URL}/rest/v1/orders?id=eq.${encodeURIComponent(found[0].id)}`, {
+      method: 'PATCH', headers: { ...headers, Prefer: 'return=minimal' }, body: JSON.stringify({ payment_receipt_path: objectPath }),
+    });
+    if (!update.ok) return respond({ error: 'Receipt uploaded, but we could not attach it to the order. Please contact Havelle.' }, 502, origin);
+    return respond({ success: true, message: 'Receipt uploaded for admin review.' }, 200, origin);
+  }
+
   if (body.action === 'track') {
     if (typeof body.tracking_code !== 'string' || !/^HV-[A-F0-9]{20}$/i.test(body.tracking_code.trim())) {
       return respond({ error: 'Enter a valid order tracking number.' }, 400, origin);
     }
     const code = encodeURIComponent(body.tracking_code.trim().toUpperCase());
-    const response = await fetch(`${PROJECT_URL}/rest/v1/orders?select=tracking_code,status,created_at,delivery_city,items_subtotal_ngn,delivery_fee_ngn,total_ngn,order_items(product_name,quantity)&tracking_code=eq.${code}&limit=1`, { headers });
+    const response = await fetch(`${PROJECT_URL}/rest/v1/orders?select=tracking_code,status,created_at,delivery_city,items_subtotal_ngn,delivery_fee_ngn,total_ngn,payment_receipt_path,order_items(product_name,quantity)&tracking_code=eq.${code}&limit=1`, { headers });
     const result = await response.json().catch(() => null);
     if (!response.ok) return respond({ error: 'Order lookup is temporarily unavailable.' }, 502, origin);
     if (!Array.isArray(result) || !result.length) return respond({ error: 'We could not find an order with that number.' }, 404, origin);
@@ -97,6 +126,7 @@ Deno.serve(async (request: Request) => {
       items_subtotal_ngn: order.items_subtotal_ngn,
       delivery_fee_ngn: order.delivery_fee_ngn,
       total_ngn: order.total_ngn,
+      has_receipt: Boolean(order.payment_receipt_path),
       items: order.order_items,
     } }, 200, origin);
   }

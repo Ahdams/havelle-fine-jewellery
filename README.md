@@ -12,7 +12,7 @@ A static storefront for Havelle NG, connected to Supabase for the product catalo
 
 ## Admin flow
 
-Open **Admin** from the shop and sign in with the Supabase Auth account that has been added to the private Havelle admin allowlist. Admins can update product names, descriptions, prices, stock and photos; change the standard delivery fee; view customer orders; add bank transfer references; and set order statuses.
+Open **Admin** from the shop and sign in with the Supabase Auth account that has been added to the private Havelle admin allowlist. Admins can update product names, descriptions, prices, stock and photos; change the standard delivery fee; view customer orders and private payment receipts; add bank transfer references; and set order statuses. Receipt files are private and are not treated as confirmed payment automatically.
 
 The browser uses only the Supabase publishable key. The service-role key stays inside the Supabase Edge Function and must never be added to this repository or the webpage.
 
