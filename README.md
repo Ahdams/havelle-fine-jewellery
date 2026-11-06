@@ -26,7 +26,7 @@ The production site is configured for `https://havelle-fine-jewellery.pages.dev/
 4. Save and wait for the first successful deployment. Cloudflare publishes the root site and the shop at `/shop/`.
 5. Future commits to `main` trigger a new deployment automatically.
 
-The GitHub Actions workflow in `.github/workflows/pages.yml` also supports GitHub Pages. Use Cloudflare Pages as the public production URL unless you intentionally set up a separate GitHub Pages deployment.
+The GitHub Actions workflow in `.github/workflows/pages.yml` also supports GitHub Pages. Cloudflare Pages remains the primary public URL unless you intentionally set up a separate GitHub Pages deployment.
 
 ## Supabase setup already applied
 
